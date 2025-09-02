@@ -1,0 +1,1 @@
+# telegram-static-json
