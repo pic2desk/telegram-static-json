@@ -3,92 +3,58 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>JSON Viewer (Monaco, same data pipeline)</title>
+  <title>JSON Viewer (Monaco, clean)</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://unpkg.com/monaco-editor@0.49.0/min/vs/loader.js"></script>
   <style>
     :root { color-scheme: light dark }
     html,body,#editor{ height:100% }
     body{ margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace }
-    header{ position:sticky; top:0; padding:10px 12px; backdrop-filter:blur(6px); z-index:2; border-bottom:1px solid #0002 }
-    .toolbar{ display:flex; gap:8px; align-items:center; padding:6px 12px }
-    button{ font-family:inherit; font-size:12px; border-radius:8px; padding:6px 10px; border:1px solid #8884; background:#fff2; cursor:pointer }
-    .muted{ opacity:.75 }
-    #container{ position:relative; height:calc(100% - 86px) }
-    #size{ margin-inline-start:auto }
   </style>
 </head>
 <body>
-<header><strong>JSON Viewer</strong></header>
-<div class="toolbar">
-  <button id="copyRaw">העתק גולמי</button>
-  <button id="copyPretty">העתק יפה</button>
-  <button id="toggleWrap">עטיפה</button>
-  <span id="size" class="muted"></span>
-</div>
-<div id="container"><div id="editor">(loading...)</div></div>
+<div id="editor"></div>
 
 <script>
 (function(){ try{Telegram.WebApp.expand()}catch(_){} })();
 
 // === שמירת צורת קבלת המידע בדיוק כפי שביקשת ===
-function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-// קורא קודם מ-?data=..., ואם אין – מנסה #data=... או תבניות ישנות
 function readToken(){
   const q = new URLSearchParams(location.search).get('data');
   if (q) return q;
   const h = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
   if (!h) return null;
-  // תעדוף data=... ב-hash
   if (h.includes('=')) {
     const hp = new URLSearchParams(h);
     if (hp.get('data')) return hp.get('data');
     if (hp.get('d')) return hp.get('d');
   }
-  // תמיכה לאחור: קח עד מפריד ראשון
   return h.split(/[&#?]/,1)[0];
 }
-// Base64URL -> UTF8. ניקוי, padding, ואז atob.
 function fromB64UrlSafe(v){
   v = decodeURIComponent(v);
-  // השאר רק תווים מותרים בבסיס: a-zA-Z0-9-_=
-  v = v.replace(/[^A-Za-z0-9\-_]/g,'');
-  v = v.replace(/-/g,'+').replace(/_/g,'/');
+  v = v.replace(/[^A-Za-z0-9\-_]/g,'').replace(/-/g,'+').replace(/_/g,'/');
   const pad = v.length % 4; if (pad) v += '='.repeat(4-pad);
   const bin = atob(v);
   const bytes = new Uint8Array(bin.length);
   for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
   return new TextDecoder('utf-8').decode(bytes);
 }
-// === סוף קוד הקבלה — לא נוגעים בו, משתמשים בו כמו שהוא ===
+// === סוף קוד הקבלה ===
 
-let lastRaw='';
 let lastPretty='';
-let editor, wordWrap='off';
 
-function bytesToSize(bytes){
-  const units=['B','KB','MB','GB']; let i=0, val=bytes;
-  while(val>=1024 && i<units.length-1){ val/=1024; i++; }
-  return `${val.toFixed(val<10 && i>0?1:0)} ${units[i]}`;
-}
-
-function prepareTexts(){
+function prepare(){
   const tok = readToken();
-  if (!tok){ lastRaw=''; lastPretty=''; document.getElementById('size').textContent=''; return; }
+  if (!tok){ lastPretty=''; return; }
   try{
     const raw = fromB64UrlSafe(tok);
-    lastRaw = raw;
     try{ lastPretty = JSON.stringify(JSON.parse(raw), null, 2); }
     catch{ lastPretty = raw; }
-    const byteSize = new Blob([raw]).size;
-    document.getElementById('size').textContent = `גודל: ${raw.length.toLocaleString()} תווים (${bytesToSize(byteSize)})`;
-  }catch(e){
-    lastRaw = ''; lastPretty = 'Failed to decode: '+String(e);
-    document.getElementById('size').textContent='';
-  }
+  }catch(e){ lastPretty = 'Failed to decode: '+String(e); }
 }
 
-// קונפיגורציית Monaco (CDN + worker)
+// Monaco config
 const CDN = 'https://unpkg.com/monaco-editor@0.49.0/min';
 require.config({ paths: { vs: CDN + '/vs' } });
 window.MonacoEnvironment = {
@@ -98,33 +64,23 @@ window.MonacoEnvironment = {
 };
 
 function render(){
-  prepareTexts();
+  prepare();
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const el = document.getElementById('editor');
-  if (editor){ editor.dispose(); }
   require(['vs/editor/editor.main'], function(){
-    editor = monaco.editor.create(el, {
-      value: lastPretty,         // מציגים יפה כשאפשר
+    monaco.editor.create(document.getElementById('editor'), {
+      value: lastPretty,
       language: 'json',
       readOnly: true,
       automaticLayout: true,
-      wordWrap: wordWrap,
+      wordWrap: 'on',
       minimap: { enabled: false },
       theme: prefersDark ? 'vs-dark' : 'vs',
       folding: true,
-      formatOnType: false,
-      formatOnPaste: false,
-      renderWhitespace: 'selection',
+      lineNumbers: 'off',
       scrollBeyondLastLine: false
     });
   });
 }
-
-// אירועים/כפתורים
-const $ = s => document.querySelector(s);
-$('#copyRaw').addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(lastRaw||''); }catch(_){}});
-$('#copyPretty').addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(lastPretty||''); }catch(_){}});
-$('#toggleWrap').addEventListener('click', ()=>{ if(!editor) return; wordWrap = (wordWrap==='off'?'on':'off'); editor.updateOptions({ wordWrap }); });
 
 window.addEventListener('hashchange', render);
 window.addEventListener('DOMContentLoaded', render);
