@@ -1,134 +1,95 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>JSON Viewer</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    :root { color-scheme: light dark; }
-    html, body { height: 100%; }
-    body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background: #0000; }
-    header { padding: 12px 16px; position: sticky; top: 0; backdrop-filter: blur(6px); }
-    .toolbar { display: flex; gap: 8px; padding: 8px 16px 0; align-items: center; }
-    button { font-family: inherit; font-size: 12px; border-radius: 8px; padding: 6px 10px; border: 1px solid #8884; background: #fff2; cursor: pointer; }
-    .wrap { padding: 12px 16px; }
-    pre { margin: 0; white-space: pre; overflow: auto; font-size: 13px; line-height: 1.5; }
-    code { display: block; padding: 12px; border-radius: 10px; }
-    .k { color: #b58900; } /* key */
-    .s { color: #2aa198; } /* string */
-    .n { color: #268bd2; } /* number */
-    .b { color: #cb4b16; } /* boolean */
-    .u { color: #6c71c4; } /* null */
-    .err { color: #dc322f; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>JSON Viewer</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  html,body { height:100% }
+  body{ margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace }
+  header{ padding:12px 16px; position:sticky; top:0; backdrop-filter:blur(6px) }
+  .wrap{ padding:12px 16px }
+  pre{ margin:0; white-space:pre; overflow:auto; font-size:13px; line-height:1.5 }
+  code{ display:block; padding:12px; border-radius:10px }
+  .k{color:#b58900}.s{color:#2aa198}.n{color:#268bd2}.b{color:#cb4b16}.u{color:#6c71c4}.err{color:#dc322f}
+  .toolbar{display:flex;gap:8px;padding:8px 16px 0;align-items:center}
+  button{font-family:inherit;font-size:12px;border-radius:8px;padding:6px 10px;border:1px solid #8884;background:#fff2;cursor:pointer}
+</style>
 </head>
 <body>
-  <header><strong>JSON Viewer</strong></header>
-  <div class="toolbar">
-    <button id="copy">העתק</button>
-    <span id="size"></span>
-  </div>
-  <div class="wrap">
-    <pre><code id="code" class="language-json">(loading...)</code></pre>
-  </div>
-  <script>
-    // Telegram theming
-    (function(){
-      try {
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg) {
-          tg.expand();
-          document.documentElement.style.background = tg.backgroundColor || '';
-          document.body.style.background = tg.backgroundColor || '';
-        }
-      } catch (_) {}
-    })();
+<header><strong>JSON Viewer</strong></header>
+<div class="toolbar">
+  <button id="copy">קהעתק</button>
+  <span id="size"></span>
+</div>
+<div class="wrap">
+  <pre><code id="code" class="language-json">(loading...)</code></pre>
+</div>
+<script>
+(function(){ try{Telegram.WebApp.expand()}catch(_){} })();
 
-    function escapeHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-    // קריאת ה-hash בצורה חסינה: #data=... או סגנון ישן של #<b64>
-    function readHashValue() {
-      const raw = location.hash.slice(1);
-      if (!raw) return null;
+// קורא קודם מ-?data=..., ואם אין – מנסה #data=... או תבניות ישנות
+function readToken(){
+  const q = new URLSearchParams(location.search).get('data');
+  if (q) return q;
+  const h = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
+  if (!h) return null;
+  // תעדוף data=... ב-hash
+  if (h.includes('=')) {
+    const hp = new URLSearchParams(h);
+    if (hp.get('data')) return hp.get('data');
+    if (hp.get('d')) return hp.get('d');
+  }
+  // תמיכה לאחור: קח עד מפריד ראשון
+  return h.split(/[&#?]/,1)[0];
+}
 
-      // אם זה בצורה של פרמטרים (#data=...&x=y)
-      if (raw.includes('=')) {
-        const params = new URLSearchParams(raw);
-        const v = params.get('data') || params.get('d') || params.get('payload');
-        if (v) return v;
-      }
+// Base64URL -> UTF8. ניקוי, padding, ואז atob.
+function fromB64UrlSafe(v){
+  v = decodeURIComponent(v);
+  // השאר רק תווים מותרים בבסיס: a-zA-Z0-9-_=
+  v = v.replace(/[^A-Za-z0-9\-_]/g,'');
+  v = v.replace(/-/g,'+').replace(/_/g,'/');
+  const pad = v.length % 4; if (pad) v += '='.repeat(4-pad);
+  const bin = atob(v);
+  const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
 
-      // תמיכה לאחור: קח את הטוקן עד התו המפריד הראשון
-      return raw.split(/[&?]/, 1)[0];
-    }
+function highlightJson(str){
+  return str
+    .replace(/"(\\.|[^"\\])*"(?=\\s*:)/g, m => '<span class="k">'+escapeHtml(m)+'</span>')
+    .replace(/"(\\.|[^"\\])*"(?!\\s*:)/g, m => '<span class="s">'+escapeHtml(m)+'</span>')
+    .replace(/\\b-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b/g, m => '<span class="n">'+m+'</span>')
+    .replace(/\\b(?:true|false)\\b/g, m => '<span class="b">'+m+'</span>')
+    .replace(/\\bnull\\b/g, m => '<span class="u">'+m+'</span>');
+}
 
-    // Base64URL -> UTF-8 string (כולל padding וניקוי אחוזים)
-    function fromB64UrlSafe(b64url) {
-      // יש מצבים שבהם הסטרינג מגיע עם אחוזים (%2F וכו') – נפענח
-      b64url = decodeURIComponent(b64url);
-
-      // תומך גם ב-base64 רגיל שהודבק בטעות
-      b64url = b64url.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
-
-      // הוסף padding אם חסר
-      const pad = b64url.length % 4;
-      if (pad) b64url += '='.repeat(4 - pad);
-
-      const bin = atob(b64url); // עלול לזרוק אם נשארו תווים לא חוקיים
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return new TextDecoder('utf-8').decode(bytes);
-    }
-
-    // הדגשה בסיסית ל-JSON
-    function highlightJson(str) {
-      return str
-        .replace(/"(\\.|[^"\\])*"(?=\\s*:)/g, m => '<span class="k">'+escapeHtml(m)+'</span>')
-        .replace(/"(\\.|[^"\\])*"(?!\\s*:)/g, m => '<span class="s">'+escapeHtml(m)+'</span>')
-        .replace(/\\b-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b/g, m => '<span class="n">'+m+'</span>')
-        .replace(/\\b(?:true|false)\\b/g, m => '<span class="b">'+m+'</span>')
-        .replace(/\\bnull\\b/g, m => '<span class="u">'+m+'</span>');
-    }
-
-    let lastRaw = '';
-    function render() {
-      const el = document.getElementById('code');
-      const sizeEl = document.getElementById('size');
-      const token = readHashValue();
-
-      if (!token) {
-        el.innerHTML = '<span class="err">No data in URL hash</span>';
-        sizeEl.textContent = '';
-        return;
-      }
-
-      try {
-        const raw = fromB64UrlSafe(token);
-        lastRaw = raw;
-        sizeEl.textContent = `גודל: ${raw.length.toLocaleString()} תווים`;
-
-        let pretty = raw;
-        try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch {}
-        el.innerHTML = highlightJson(pretty);
-      } catch (e) {
-        el.innerHTML = '<span class="err">Failed to decode: '+escapeHtml(String(e))+'</span>';
-        sizeEl.textContent = '';
-      }
-    }
-
-    document.getElementById('copy').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(lastRaw || '');
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-      } catch (_) {}
-    });
-
-    window.addEventListener('hashchange', render);
-    window.addEventListener('DOMContentLoaded', render);
-  </script>
+let lastRaw='';
+function render(){
+  const el = document.getElementById('code');
+  const sizeEl = document.getElementById('size');
+  const tok = readToken();
+  if (!tok){ el.innerHTML='<span class="err">No data token</span>'; sizeEl.textContent=''; return }
+  try{
+    const raw = fromB64UrlSafe(tok);
+    lastRaw = raw;
+    sizeEl.textContent = `גודל: ${raw.length.toLocaleString()} תווים`;
+    let pretty = raw; try{ pretty = JSON.stringify(JSON.parse(raw), null, 2) }catch{}
+    el.innerHTML = highlightJson(pretty);
+  }catch(e){
+    el.innerHTML = '<span class="err">Failed to decode: '+escapeHtml(String(e))+'</span>';
+    sizeEl.textContent='';
+  }
+}
+document.getElementById('copy').addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(lastRaw||'') }catch(_){} });
+window.addEventListener('hashchange', render);
+window.addEventListener('DOMContentLoaded', render);
+</script>
 </body>
 </html>
