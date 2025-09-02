@@ -10,6 +10,8 @@
     html, body { height: 100%; }
     body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background: #0000; }
     header { padding: 12px 16px; position: sticky; top: 0; backdrop-filter: blur(6px); }
+    .toolbar { display: flex; gap: 8px; padding: 8px 16px 0; align-items: center; }
+    button { font-family: inherit; font-size: 12px; border-radius: 8px; padding: 6px 10px; border: 1px solid #8884; background: #fff2; cursor: pointer; }
     .wrap { padding: 12px 16px; }
     pre { margin: 0; white-space: pre; overflow: auto; font-size: 13px; line-height: 1.5; }
     code { display: block; padding: 12px; border-radius: 10px; }
@@ -19,8 +21,6 @@
     .b { color: #cb4b16; } /* boolean */
     .u { color: #6c71c4; } /* null */
     .err { color: #dc322f; }
-    .toolbar { display: flex; gap: 8px; padding: 8px 16px 0; align-items: center; }
-    button { font-family: inherit; font-size: 12px; border-radius: 8px; padding: 6px 10px; border: 1px solid #8884; background: #fff2; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -33,7 +33,7 @@
     <pre><code id="code" class="language-json">(loading...)</code></pre>
   </div>
   <script>
-    // אינטגרציה עם Telegram WebApp (מסך מלא, צבעי רקע)
+    // Telegram theming
     (function(){
       try {
         const tg = window.Telegram && window.Telegram.WebApp;
@@ -45,32 +45,51 @@
       } catch (_) {}
     })();
 
-    function fromB64Url(b64url) {
-      b64url = String(b64url).replace(/-/g, '+').replace(/_/g, '/');
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // קריאת ה-hash בצורה חסינה: #data=... או סגנון ישן של #<b64>
+    function readHashValue() {
+      const raw = location.hash.slice(1);
+      if (!raw) return null;
+
+      // אם זה בצורה של פרמטרים (#data=...&x=y)
+      if (raw.includes('=')) {
+        const params = new URLSearchParams(raw);
+        const v = params.get('data') || params.get('d') || params.get('payload');
+        if (v) return v;
+      }
+
+      // תמיכה לאחור: קח את הטוקן עד התו המפריד הראשון
+      return raw.split(/[&?]/, 1)[0];
+    }
+
+    // Base64URL -> UTF-8 string (כולל padding וניקוי אחוזים)
+    function fromB64UrlSafe(b64url) {
+      // יש מצבים שבהם הסטרינג מגיע עם אחוזים (%2F וכו') – נפענח
+      b64url = decodeURIComponent(b64url);
+
+      // תומך גם ב-base64 רגיל שהודבק בטעות
+      b64url = b64url.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+
+      // הוסף padding אם חסר
       const pad = b64url.length % 4;
       if (pad) b64url += '='.repeat(4 - pad);
-      const bin = atob(b64url);
+
+      const bin = atob(b64url); // עלול לזרוק אם נשארו תווים לא חוקיים
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       return new TextDecoder('utf-8').decode(bytes);
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
     // הדגשה בסיסית ל-JSON
     function highlightJson(str) {
       return str
-        // keys: "key":
         .replace(/"(\\.|[^"\\])*"(?=\\s*:)/g, m => '<span class="k">'+escapeHtml(m)+'</span>')
-        // strings: "value"
         .replace(/"(\\.|[^"\\])*"(?!\\s*:)/g, m => '<span class="s">'+escapeHtml(m)+'</span>')
-        // numbers
         .replace(/\\b-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b/g, m => '<span class="n">'+m+'</span>')
-        // booleans
         .replace(/\\b(?:true|false)\\b/g, m => '<span class="b">'+m+'</span>')
-        // null
         .replace(/\\bnull\\b/g, m => '<span class="u">'+m+'</span>');
     }
 
@@ -78,15 +97,16 @@
     function render() {
       const el = document.getElementById('code');
       const sizeEl = document.getElementById('size');
-      const hash = location.hash.slice(1);
+      const token = readHashValue();
 
-      if (!hash) {
+      if (!token) {
         el.innerHTML = '<span class="err">No data in URL hash</span>';
         sizeEl.textContent = '';
         return;
       }
+
       try {
-        const raw = fromB64Url(hash);
+        const raw = fromB64UrlSafe(token);
         lastRaw = raw;
         sizeEl.textContent = `גודל: ${raw.length.toLocaleString()} תווים`;
 
