@@ -21,16 +21,20 @@
       transition: transform .15s;
     }
     #copy-fab:active{ transform:scale(.9) }
+    .key-highlight{
+      background:rgba(51,144,236,.25)!important;
+      border-radius:3px;
+      transition: background .3s;
+    }
   </style>
 </head>
 <body>
 <div id="editor"></div>
-<button id="copy-fab" onclick="showCopyMenu()">📋</button>
+<button id="copy-fab" onclick="copyText(lastPretty)">📋</button>
 
 <script>
 (function(){ try{Telegram.WebApp.expand()}catch(_){} })();
 
-// === שמירת צורת קבלת המידע בדיוק כפי שביקשת ===
 function readToken(){
   const q = new URLSearchParams(location.search).get('data');
   if (q) return q;
@@ -52,7 +56,6 @@ function fromB64UrlSafe(v){
   for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
   return new TextDecoder('utf-8').decode(bytes);
 }
-// === סוף קוד הקבלה ===
 
 let lastPretty='';
 let parsedJson=null;
@@ -67,7 +70,6 @@ function prepare(){
   }catch(e){ lastPretty = 'Failed to decode: '+String(e); parsedJson=null; }
 }
 
-// Copy helpers
 function copyText(text){
   navigator.clipboard.writeText(text).then(function(){
     try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
@@ -76,39 +78,55 @@ function copyText(text){
   });
 }
 
-function extractValue(key){
-  if (!parsedJson) return null;
-  if (key === 'all') return lastPretty;
-  if (key === 'machineId') return parsedJson.environment && parsedJson.environment.machineId || null;
-  if (key === 'properties') return parsedJson.properties ? JSON.stringify(parsedJson.properties, null, 2) : null;
-  if (key === 'message') return parsedJson.message || null;
-  return null;
+// Build a map: line number -> { key, value } from the pretty-printed JSON
+function buildLineMap(json, pretty){
+  var map = {};
+  if (!json) return map;
+  var lines = pretty.split('\n');
+  // Walk the JSON recursively, track path
+  function visit(obj, path){
+    if (obj === null || typeof obj !== 'object') return;
+    var keys = Array.isArray(obj) ? null : Object.keys(obj);
+    if (!keys) return; // skip arrays for key-click
+    keys.forEach(function(k){
+      var val = obj[k];
+      // Find line with this key at the right indent level
+      var needle = '"' + k + '"';
+      for (var i = 0; i < lines.length; i++){
+        if (map[i+1] && map[i+1].path) continue; // already assigned
+        if (lines[i].indexOf(needle) !== -1){
+          var copyVal = (val !== null && typeof val === 'object') ? JSON.stringify(val, null, 2) : String(val);
+          map[i+1] = { key: k, value: copyVal, path: path.concat(k).join('.') };
+          break;
+        }
+      }
+      if (val && typeof val === 'object') visit(val, path.concat(k));
+    });
+  }
+  visit(json, []);
+  return map;
 }
 
-function showCopyMenu(){
-  if (!parsedJson){
-    copyText(lastPretty);
-    return;
-  }
+var lineMap = {};
+var editorInstance = null;
+var decorations = [];
 
-  var buttons = [{ id:'all', type:'default', text:'Copy All' }];
-  if (parsedJson.environment && parsedJson.environment.machineId)
-    buttons.push({ id:'machineId', type:'default', text:'Copy Machine ID' });
-  if (parsedJson.message)
-    buttons.push({ id:'message', type:'default', text:'Copy Message' });
-  if (parsedJson.properties)
-    buttons.push({ id:'properties', type:'default', text:'Copy Properties' });
+function handleClick(e){
+  if (!editorInstance) return;
+  var pos = e.target.position;
+  if (!pos) return;
+  var lineNum = pos.lineNumber;
+  var info = lineMap[lineNum];
+  if (!info) return;
 
-  try{
-    Telegram.WebApp.showPopup({ title:'Copy', message:'Select what to copy', buttons:buttons }, function(id){
-      if (!id) return;
-      var val = extractValue(id);
-      if (val) copyText(val);
-    });
-  }catch(_){
-    // Fallback: copy all
-    copyText(lastPretty);
-  }
+  copyText(info.value);
+
+  // Flash highlight on the line
+  decorations = editorInstance.deltaDecorations(decorations, [{
+    range: new monaco.Range(lineNum, 1, lineNum, 1),
+    options: { isWholeLine: true, className: 'key-highlight' }
+  }]);
+  setTimeout(function(){ decorations = editorInstance.deltaDecorations(decorations, []); }, 600);
 }
 
 // Monaco config
@@ -122,9 +140,11 @@ window.MonacoEnvironment = {
 
 function render(){
   prepare();
+  lineMap = buildLineMap(parsedJson, lastPretty);
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   require(['vs/editor/editor.main'], function(){
-    monaco.editor.create(document.getElementById('editor'), {
+    document.getElementById('editor').innerHTML = '';
+    editorInstance = monaco.editor.create(document.getElementById('editor'), {
       value: lastPretty,
       language: 'json',
       readOnly: true,
@@ -136,6 +156,7 @@ function render(){
       lineNumbers: 'off',
       scrollBeyondLastLine: false
     });
+    editorInstance.onMouseDown(handleClick);
   });
 }
 
