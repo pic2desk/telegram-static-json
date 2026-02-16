@@ -70,33 +70,58 @@ function prepare(){
   }catch(e){ lastPretty = 'Failed to decode: '+String(e); parsedJson=null; }
 }
 
+// Clipboard: try multiple methods
 function copyText(text){
-  navigator.clipboard.writeText(text).then(function(){
-    try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
-  }).catch(function(){
-    try{ Telegram.WebApp.showAlert('Copy failed'); }catch(_){}
-  });
+  // Method 1: Clipboard API
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){
+      try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
+    }).catch(function(){
+      // Fallback to execCommand
+      execCopy(text);
+    });
+    return;
+  }
+  execCopy(text);
 }
 
-// Build a map: line number -> { key, value } from the pretty-printed JSON
+function execCopy(text){
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    var ok = document.execCommand('copy');
+    try{ Telegram.WebApp.showAlert(ok ? 'Copied ✓' : 'Copy failed'); }catch(_){}
+  } catch(e) {
+    try{ Telegram.WebApp.showAlert('Copy failed: ' + e); }catch(_){}
+  }
+  document.body.removeChild(ta);
+}
+
+// Build line map: line number (1-based) -> { key, value }
 function buildLineMap(json, pretty){
   var map = {};
   if (!json) return map;
   var lines = pretty.split('\n');
-  // Walk the JSON recursively, track path
+  var usedLines = {};
+
   function visit(obj, path){
     if (obj === null || typeof obj !== 'object') return;
-    var keys = Array.isArray(obj) ? null : Object.keys(obj);
-    if (!keys) return; // skip arrays for key-click
+    if (Array.isArray(obj)) return;
+    var keys = Object.keys(obj);
     keys.forEach(function(k){
       var val = obj[k];
-      // Find line with this key at the right indent level
       var needle = '"' + k + '"';
       for (var i = 0; i < lines.length; i++){
-        if (map[i+1] && map[i+1].path) continue; // already assigned
-        if (lines[i].indexOf(needle) !== -1){
+        var ln = i + 1;
+        if (usedLines[ln]) continue;
+        if (lines[i].indexOf(needle) !== -1 && lines[i].indexOf(':') !== -1){
           var copyVal = (val !== null && typeof val === 'object') ? JSON.stringify(val, null, 2) : String(val);
-          map[i+1] = { key: k, value: copyVal, path: path.concat(k).join('.') };
+          map[ln] = { key: k, value: copyVal };
+          usedLines[ln] = true;
           break;
         }
       }
@@ -111,18 +136,10 @@ var lineMap = {};
 var editorInstance = null;
 var decorations = [];
 
-var lastCopiedLine = 0;
-function handleLineClick(lineNum){
-  if (!editorInstance || !lineNum) return;
-  if (lineNum === lastCopiedLine) return; // debounce same line
-  var info = lineMap[lineNum];
-  if (!info) return;
-  lastCopiedLine = lineNum;
-  setTimeout(function(){ lastCopiedLine = 0; }, 1000);
+// Track tap on editor DOM directly for user gesture context
+var pendingLine = 0;
 
-  copyText(info.value);
-
-  // Flash highlight on the line
+function flashLine(lineNum){
   decorations = editorInstance.deltaDecorations(decorations, [{
     range: new monaco.Range(lineNum, 1, lineNum, 1),
     options: { isWholeLine: true, className: 'key-highlight' }
@@ -142,7 +159,7 @@ window.MonacoEnvironment = {
 function render(){
   prepare();
   lineMap = buildLineMap(parsedJson, lastPretty);
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   require(['vs/editor/editor.main'], function(){
     document.getElementById('editor').innerHTML = '';
     editorInstance = monaco.editor.create(document.getElementById('editor'), {
@@ -158,13 +175,25 @@ function render(){
       lineNumbers: 'off',
       scrollBeyondLastLine: false
     });
+
     // Prevent keyboard on mobile
     var textarea = document.querySelector('.monaco-editor textarea');
     if (textarea) textarea.setAttribute('readonly','readonly');
 
-    // Use cursor position change — reliable on mobile touch
-    editorInstance.onDidChangeCursorPosition(function(e){
-      handleLineClick(e.position.lineNumber);
+    // Direct click on editor DOM — this IS a user gesture (clipboard will work)
+    var editorDom = document.getElementById('editor');
+    editorDom.addEventListener('click', function(){
+      // Short delay to let Monaco update cursor position first
+      setTimeout(function(){
+        var pos = editorInstance.getPosition();
+        if (!pos) return;
+        var lineNum = pos.lineNumber;
+        var info = lineMap[lineNum];
+        if (info) {
+          copyText(info.value);
+          flashLine(lineNum);
+        }
+      }, 50);
     });
   });
 }
