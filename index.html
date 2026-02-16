@@ -111,13 +111,14 @@ var lineMap = {};
 var editorInstance = null;
 var decorations = [];
 
-function handleClick(e){
-  if (!editorInstance) return;
-  var pos = e.target.position;
-  if (!pos) return;
-  var lineNum = pos.lineNumber;
+var lastCopiedLine = 0;
+function handleLineClick(lineNum){
+  if (!editorInstance || !lineNum) return;
+  if (lineNum === lastCopiedLine) return; // debounce same line
   var info = lineMap[lineNum];
   if (!info) return;
+  lastCopiedLine = lineNum;
+  setTimeout(function(){ lastCopiedLine = 0; }, 1000);
 
   copyText(info.value);
 
@@ -157,11 +158,13 @@ function render(){
       lineNumbers: 'off',
       scrollBeyondLastLine: false
     });
-    editorInstance.onMouseDown(function(e){
-      // Prevent keyboard on mobile
-      var textarea = document.querySelector('.monaco-editor textarea');
-      if (textarea) textarea.setAttribute('readonly','readonly');
-      handleClick(e);
+    // Prevent keyboard on mobile
+    var textarea = document.querySelector('.monaco-editor textarea');
+    if (textarea) textarea.setAttribute('readonly','readonly');
+
+    // Use cursor position change — reliable on mobile touch
+    editorInstance.onDidChangeCursorPosition(function(e){
+      handleLineClick(e.position.lineNumber);
     });
   });
 }
