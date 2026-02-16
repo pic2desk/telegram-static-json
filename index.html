@@ -71,9 +71,7 @@ function prepare(){
 
 function copyText(text){
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(function(){
-      try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
-    }).catch(function(){
+    navigator.clipboard.writeText(text).then(function(){}).catch(function(){
       execCopy(text);
     });
     return;
@@ -90,7 +88,7 @@ function execCopy(text){
   try{ ta.setSelectionRange(0, text.length); }catch(_){}
   var ok = document.execCommand('copy');
   document.body.removeChild(ta);
-  try{ Telegram.WebApp.showAlert(ok ? 'Copied ✓' : 'Copy failed'); }catch(_){}
+  if (!ok) { try{ Telegram.WebApp.showAlert('Copy failed'); }catch(_){} }
 }
 
 // Build line map
