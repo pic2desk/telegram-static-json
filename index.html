@@ -10,10 +10,22 @@
     :root { color-scheme: light dark }
     html,body,#editor{ height:100% }
     body{ margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace }
+    #copy-fab{
+      position:fixed; bottom:24px; right:24px; z-index:9999;
+      width:48px; height:48px; border-radius:50%;
+      background:var(--tg-theme-button-color, #3390ec);
+      color:var(--tg-theme-button-text-color, #fff);
+      border:none; cursor:pointer;
+      font-size:22px; display:flex; align-items:center; justify-content:center;
+      box-shadow:0 2px 8px rgba(0,0,0,.3);
+      transition: transform .15s;
+    }
+    #copy-fab:active{ transform:scale(.9) }
   </style>
 </head>
 <body>
 <div id="editor"></div>
+<button id="copy-fab" onclick="showCopyMenu()">📋</button>
 
 <script>
 (function(){ try{Telegram.WebApp.expand()}catch(_){} })();
@@ -43,15 +55,60 @@ function fromB64UrlSafe(v){
 // === סוף קוד הקבלה ===
 
 let lastPretty='';
+let parsedJson=null;
 
 function prepare(){
   const tok = readToken();
-  if (!tok){ lastPretty=''; return; }
+  if (!tok){ lastPretty=''; parsedJson=null; return; }
   try{
     const raw = fromB64UrlSafe(tok);
-    try{ lastPretty = JSON.stringify(JSON.parse(raw), null, 2); }
-    catch{ lastPretty = raw; }
-  }catch(e){ lastPretty = 'Failed to decode: '+String(e); }
+    try{ parsedJson = JSON.parse(raw); lastPretty = JSON.stringify(parsedJson, null, 2); }
+    catch{ lastPretty = raw; parsedJson=null; }
+  }catch(e){ lastPretty = 'Failed to decode: '+String(e); parsedJson=null; }
+}
+
+// Copy helpers
+function copyText(text){
+  navigator.clipboard.writeText(text).then(function(){
+    try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
+  }).catch(function(){
+    try{ Telegram.WebApp.showAlert('Copy failed'); }catch(_){}
+  });
+}
+
+function extractValue(key){
+  if (!parsedJson) return null;
+  if (key === 'all') return lastPretty;
+  if (key === 'machineId') return parsedJson.environment && parsedJson.environment.machineId || null;
+  if (key === 'properties') return parsedJson.properties ? JSON.stringify(parsedJson.properties, null, 2) : null;
+  if (key === 'message') return parsedJson.message || null;
+  return null;
+}
+
+function showCopyMenu(){
+  if (!parsedJson){
+    copyText(lastPretty);
+    return;
+  }
+
+  var buttons = [{ id:'all', type:'default', text:'Copy All' }];
+  if (parsedJson.environment && parsedJson.environment.machineId)
+    buttons.push({ id:'machineId', type:'default', text:'Copy Machine ID' });
+  if (parsedJson.message)
+    buttons.push({ id:'message', type:'default', text:'Copy Message' });
+  if (parsedJson.properties)
+    buttons.push({ id:'properties', type:'default', text:'Copy Properties' });
+
+  try{
+    Telegram.WebApp.showPopup({ title:'Copy', buttons:buttons }, function(id){
+      if (!id) return;
+      var val = extractValue(id);
+      if (val) copyText(val);
+    });
+  }catch(_){
+    // Fallback: copy all
+    copyText(lastPretty);
+  }
 }
 
 // Monaco config
