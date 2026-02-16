@@ -100,7 +100,7 @@ function showCopyMenu(){
     buttons.push({ id:'properties', type:'default', text:'Copy Properties' });
 
   try{
-    Telegram.WebApp.showPopup({ title:'Copy', buttons:buttons }, function(id){
+    Telegram.WebApp.showPopup({ title:'Copy', message:'Select what to copy', buttons:buttons }, function(id){
       if (!id) return;
       var val = extractValue(id);
       if (val) copyText(val);
