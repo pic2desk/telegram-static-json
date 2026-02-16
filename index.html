@@ -148,6 +148,7 @@ function render(){
       value: lastPretty,
       language: 'json',
       readOnly: true,
+      domReadOnly: true,
       automaticLayout: true,
       wordWrap: 'on',
       minimap: { enabled: false },
@@ -156,7 +157,12 @@ function render(){
       lineNumbers: 'off',
       scrollBeyondLastLine: false
     });
-    editorInstance.onMouseDown(handleClick);
+    editorInstance.onMouseDown(function(e){
+      // Prevent keyboard on mobile
+      var textarea = document.querySelector('.monaco-editor textarea');
+      if (textarea) textarea.setAttribute('readonly','readonly');
+      handleClick(e);
+    });
   });
 }
 
