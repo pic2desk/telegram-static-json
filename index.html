@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>JSON Viewer (Monaco Debug)</title>
+  <title>JSON Viewer (Monaco, clean)</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://unpkg.com/monaco-editor@0.49.0/min/vs/loader.js"></script>
   <style>
@@ -18,32 +18,21 @@
       border:none; cursor:pointer;
       font-size:22px; display:flex; align-items:center; justify-content:center;
       box-shadow:0 2px 8px rgba(0,0,0,.3);
+      transition: transform .15s;
     }
-    #debug{
-      position:fixed; top:0; left:0; right:0; z-index:9999;
-      background:rgba(0,0,0,.85); color:#0f0; font-size:11px;
-      padding:8px; max-height:40vh; overflow:auto; display:none;
+    #copy-fab:active{ transform:scale(.9) }
+    .key-highlight{
+      background:rgba(51,144,236,.25)!important;
+      border-radius:3px;
     }
   </style>
 </head>
 <body>
-<div id="debug"></div>
 <div id="editor"></div>
-<button id="copy-fab" onclick="copyAll()">📋</button>
+<button id="copy-fab" onclick="copyText(lastPretty)">📋</button>
 
 <script>
 (function(){ try{Telegram.WebApp.expand()}catch(_){} })();
-
-var debugEl;
-var debugLines = [];
-function dbg(msg){
-  debugLines.push(new Date().toISOString().substr(11,8) + ' ' + msg);
-  if (debugLines.length > 20) debugLines.shift();
-  if (debugEl) {
-    debugEl.style.display = 'block';
-    debugEl.textContent = debugLines.join('\n');
-  }
-}
 
 function readToken(){
   var q = new URLSearchParams(location.search).get('data');
@@ -80,19 +69,36 @@ function prepare(){
   }catch(e){ lastPretty = 'Failed to decode: '+String(e); parsedJson=null; }
 }
 
-function copyAll(){
-  navigator.clipboard.writeText(lastPretty).then(function(){
-    dbg('copyAll OK');
-  }).catch(function(e){ dbg('copyAll FAIL: '+e); });
+function copyText(text){
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){
+      try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
+    }).catch(function(){
+      execCopy(text);
+    });
+    return;
+  }
+  execCopy(text);
 }
 
-// Build line map from pretty JSON
+function execCopy(text){
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try{ ta.setSelectionRange(0, text.length); }catch(_){}
+  var ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  try{ Telegram.WebApp.showAlert(ok ? 'Copied ✓' : 'Copy failed'); }catch(_){}
+}
+
+// Build line map
 function buildLineMap(json, pretty){
   var map = {};
   if (!json || typeof json !== 'object') return map;
   var lines = pretty.split('\n');
   var used = {};
-
   function visit(obj){
     if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return;
     Object.keys(obj).forEach(function(k){
@@ -100,10 +106,8 @@ function buildLineMap(json, pretty){
       var needle = '"' + k + '"';
       for (var i = 0; i < lines.length; i++){
         if (used[i]) continue;
-        var line = lines[i];
-        // Must contain "key": pattern
-        var idx = line.indexOf(needle);
-        if (idx !== -1 && line.indexOf(':', idx + needle.length) !== -1){
+        var idx = lines[i].indexOf(needle);
+        if (idx !== -1 && lines[i].indexOf(':', idx + needle.length) !== -1){
           var copyVal = (val !== null && typeof val === 'object') ? JSON.stringify(val, null, 2) : String(val);
           map[i + 1] = { key: k, value: copyVal };
           used[i] = true;
@@ -119,6 +123,8 @@ function buildLineMap(json, pretty){
 
 var lineMap = {};
 var editorInstance = null;
+var decorations = [];
+var pendingCopy = null; // {value, lineNum} set by cursorChange, consumed by touchend
 
 var CDN = 'https://unpkg.com/monaco-editor@0.49.0/min';
 require.config({ paths: { vs: CDN + '/vs' } });
@@ -128,14 +134,20 @@ window.MonacoEnvironment = {
   ); }
 };
 
+function flashLine(lineNum){
+  if (!editorInstance) return;
+  decorations = editorInstance.deltaDecorations(decorations, [{
+    range: new monaco.Range(lineNum, 1, lineNum, 1),
+    options: { isWholeLine: true, className: 'key-highlight' }
+  }]);
+  setTimeout(function(){ decorations = editorInstance.deltaDecorations(decorations, []); }, 600);
+}
+
 function render(){
-  debugEl = document.getElementById('debug');
   prepare();
   lineMap = buildLineMap(parsedJson, lastPretty);
-  dbg('lineMap built: ' + Object.keys(lineMap).length + ' entries');
-  dbg('lineMap keys: ' + JSON.stringify(Object.keys(lineMap)));
-
   var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
   require(['vs/editor/editor.main'], function(){
     document.getElementById('editor').innerHTML = '';
     editorInstance = monaco.editor.create(document.getElementById('editor'), {
@@ -152,49 +164,42 @@ function render(){
       scrollBeyondLastLine: false
     });
 
-    // Test 1: Monaco onMouseDown
-    editorInstance.onMouseDown(function(e){
-      var tgtPos = e.target && e.target.position;
-      var tgtType = e.target && e.target.type;
-      dbg('onMouseDown type=' + tgtType + ' pos=' + JSON.stringify(tgtPos));
-      if (tgtPos) {
-        var info = lineMap[tgtPos.lineNumber];
-        dbg('  lineMap[' + tgtPos.lineNumber + ']=' + (info ? info.key : 'NONE'));
-        if (info) {
-          navigator.clipboard.writeText(info.value).then(function(){
-            dbg('  COPY OK: ' + info.key);
-          }).catch(function(err){
-            dbg('  COPY FAIL clipboard: ' + err);
-            // fallback
-            var ta = document.createElement('textarea');
-            ta.value = info.value;
-            ta.style.cssText = 'position:fixed;left:-9999px;opacity:0';
-            document.body.appendChild(ta);
-            ta.focus(); ta.select();
-            var ok = document.execCommand('copy');
-            dbg('  execCommand fallback: ' + ok);
-            document.body.removeChild(ta);
-          });
-        }
+    // Prevent keyboard
+    var textarea = document.querySelector('.monaco-editor textarea');
+    if (textarea) textarea.setAttribute('readonly','readonly');
+
+    // Step 1: cursorChange sets pending copy (fires on tap, but NOT a user gesture)
+    editorInstance.onDidChangeCursorPosition(function(e){
+      var info = lineMap[e.position.lineNumber];
+      if (info) {
+        pendingCopy = { value: info.value, lineNum: e.position.lineNumber };
+      } else {
+        pendingCopy = null;
       }
     });
 
-    // Test 2: onDidChangeCursorPosition
-    editorInstance.onDidChangeCursorPosition(function(e){
-      dbg('cursorChange line=' + e.position.lineNumber + ' reason=' + e.reason);
+    // Step 2: DOM touchend IS a user gesture — execute the pending copy here
+    document.getElementById('editor').addEventListener('touchend', function(){
+      // Small delay to ensure cursorChange fires first
+      setTimeout(function(){
+        if (pendingCopy) {
+          copyText(pendingCopy.value);
+          flashLine(pendingCopy.lineNum);
+          pendingCopy = null;
+        }
+      }, 100);
     });
 
-    // Test 3: raw DOM events on editor
-    var edDom = document.getElementById('editor');
-    edDom.addEventListener('touchend', function(e){
-      dbg('DOM touchend');
+    // Also handle mouse click for desktop
+    document.getElementById('editor').addEventListener('click', function(){
+      setTimeout(function(){
+        if (pendingCopy) {
+          copyText(pendingCopy.value);
+          flashLine(pendingCopy.lineNum);
+          pendingCopy = null;
+        }
+      }, 100);
     });
-    edDom.addEventListener('click', function(e){
-      var pos = editorInstance.getPosition();
-      dbg('DOM click, getPosition=' + JSON.stringify(pos));
-    });
-
-    dbg('Monaco ready');
   });
 }
 
