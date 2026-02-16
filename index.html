@@ -3,37 +3,92 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>JSON Viewer (Monaco, clean)</title>
+  <title>JSON Viewer (Custom Clickable)</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="https://unpkg.com/monaco-editor@0.49.0/min/vs/loader.js"></script>
   <style>
     :root { color-scheme: light dark }
-    html,body,#editor{ height:100% }
-    body{ margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace }
+    html,body{ height:100%; margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; }
+    body{ background:var(--tg-theme-bg-color, #fff); color:var(--tg-theme-text-color, #000); }
+    #container{ 
+      height:100%; overflow:auto; padding:16px; box-sizing:border-box;
+      white-space:pre-wrap; font-size:14px; line-height:1.4;
+    }
     #copy-fab{
       position:fixed; bottom:24px; right:24px; z-index:9999;
       width:48px; height:48px; border-radius:50%;
       background:var(--tg-theme-button-color, #3390ec);
       color:var(--tg-theme-button-text-color, #fff);
-      border:none; cursor:pointer;
+      border:none; cursor:pointer; touch-action:manipulation;
       font-size:22px; display:flex; align-items:center; justify-content:center;
       box-shadow:0 2px 8px rgba(0,0,0,.3);
       transition: transform .15s;
     }
     #copy-fab:active{ transform:scale(.9) }
-    .key-highlight{
-      background:rgba(51,144,236,.25)!important;
-      border-radius:3px;
-      transition: background .3s;
+    
+    /* JSON styling */
+    .json-key {
+      color: #0969da;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+      border-radius: 3px;
+      padding: 1px 3px;
+      margin: -1px -3px;
+      transition: background .2s, transform .1s;
+      display: inline-block;
     }
+    .json-key:hover, .json-key:focus {
+      background: rgba(9, 105, 218, 0.1);
+    }
+    .json-key:active {
+      background: rgba(9, 105, 218, 0.2);
+      transform: scale(0.98);
+    }
+    .json-key-flash {
+      background: rgba(9, 105, 218, 0.3) !important;
+      animation: flash-fade 0.6s ease-out;
+    }
+    @keyframes flash-fade {
+      0% { background: rgba(9, 105, 218, 0.4) !important; }
+      100% { background: rgba(9, 105, 218, 0.1) !important; }
+    }
+    
+    .json-string { color: #0a3069; }
+    .json-number { color: #0550ae; }
+    .json-boolean { color: #8250df; }
+    .json-null { color: #656d76; }
+    .json-bracket { color: #656d76; font-weight: bold; }
+    
+    /* Dark mode */
+    @media (prefers-color-scheme: dark) {
+      .json-key { color: #58a6ff; }
+      .json-key:hover, .json-key:focus { background: rgba(88, 166, 255, 0.1); }
+      .json-key:active { background: rgba(88, 166, 255, 0.2); }
+      .json-key-flash { background: rgba(88, 166, 255, 0.3) !important; }
+      @keyframes flash-fade {
+        0% { background: rgba(88, 166, 255, 0.4) !important; }
+        100% { background: rgba(88, 166, 255, 0.1) !important; }
+      }
+      .json-string { color: #a5d6ff; }
+      .json-number { color: #79c0ff; }
+      .json-boolean { color: #d2a8ff; }
+      .json-null { color: #8b949e; }
+      .json-bracket { color: #8b949e; }
+    }
+    
+    .error { color: #da3633; font-weight: bold; }
   </style>
 </head>
 <body>
-<div id="editor"></div>
-<button id="copy-fab" onclick="copyText(lastPretty)">📋</button>
+<div id="container"></div>
+<button id="copy-fab" onclick="copyAllText()">📋</button>
 
 <script>
 (function(){ try{Telegram.WebApp.expand()}catch(_){} })();
+
+let lastPretty = '';
+let parsedJson = null;
+let keyValueMap = new Map();
 
 function readToken(){
   const q = new URLSearchParams(location.search).get('data');
@@ -47,6 +102,7 @@ function readToken(){
   }
   return h.split(/[&#?]/,1)[0];
 }
+
 function fromB64UrlSafe(v){
   v = decodeURIComponent(v);
   v = v.replace(/[^A-Za-z0-9\-_]/g,'').replace(/-/g,'+').replace(/_/g,'/');
@@ -57,146 +113,172 @@ function fromB64UrlSafe(v){
   return new TextDecoder('utf-8').decode(bytes);
 }
 
-let lastPretty='';
-let parsedJson=null;
-
 function prepare(){
   const tok = readToken();
   if (!tok){ lastPretty=''; parsedJson=null; return; }
   try{
     const raw = fromB64UrlSafe(tok);
-    try{ parsedJson = JSON.parse(raw); lastPretty = JSON.stringify(parsedJson, null, 2); }
+    try{ 
+      parsedJson = JSON.parse(raw); 
+      lastPretty = JSON.stringify(parsedJson, null, 2); 
+    }
     catch{ lastPretty = raw; parsedJson=null; }
   }catch(e){ lastPretty = 'Failed to decode: '+String(e); parsedJson=null; }
 }
 
-// Clipboard: try multiple methods
-function copyText(text){
-  // Method 1: Clipboard API
+// Enhanced clipboard function with multiple fallbacks and immediate execution
+function copyText(text, element){
+  // Visual feedback first
+  if (element) {
+    element.classList.add('json-key-flash');
+    setTimeout(() => element.classList.remove('json-key-flash'), 600);
+  }
+  
+  // Method 1: Modern Clipboard API (direct, no timeout)
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(function(){
-      try{ Telegram.WebApp.showAlert('Copied ✓'); }catch(_){}
-    }).catch(function(){
-      // Fallback to execCommand
-      execCopy(text);
+    navigator.clipboard.writeText(text).then(() => {
+      showFeedback('Copied ✓');
+    }).catch(() => {
+      // Immediate fallback to execCommand
+      execCopyFallback(text);
     });
     return;
   }
-  execCopy(text);
+  
+  // Method 2: execCommand fallback
+  execCopyFallback(text);
 }
 
-function execCopy(text){
-  var ta = document.createElement('textarea');
+function execCopyFallback(text){
+  const ta = document.createElement('textarea');
   ta.value = text;
-  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
   document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
+  
   try {
-    var ok = document.execCommand('copy');
-    try{ Telegram.WebApp.showAlert(ok ? 'Copied ✓' : 'Copy failed'); }catch(_){}
+    ta.focus();
+    ta.select();
+    // Force selection on mobile
+    ta.setSelectionRange(0, text.length);
+    
+    const success = document.execCommand('copy');
+    showFeedback(success ? 'Copied ✓' : 'Copy failed');
   } catch(e) {
-    try{ Telegram.WebApp.showAlert('Copy failed: ' + e); }catch(_){}
+    // Method 3: Try to trigger select and copy via touch events
+    try {
+      ta.focus();
+      ta.select();
+      document.execCommand('selectAll');
+      document.execCommand('copy');
+      showFeedback('Copied ✓');
+    } catch(e2) {
+      showFeedback('Copy failed');
+    }
   }
+  
   document.body.removeChild(ta);
 }
 
-// Build line map: line number (1-based) -> { key, value }
-function buildLineMap(json, pretty){
-  var map = {};
-  if (!json) return map;
-  var lines = pretty.split('\n');
-  var usedLines = {};
-
-  function visit(obj, path){
-    if (obj === null || typeof obj !== 'object') return;
-    if (Array.isArray(obj)) return;
-    var keys = Object.keys(obj);
-    keys.forEach(function(k){
-      var val = obj[k];
-      var needle = '"' + k + '"';
-      for (var i = 0; i < lines.length; i++){
-        var ln = i + 1;
-        if (usedLines[ln]) continue;
-        if (lines[i].indexOf(needle) !== -1 && lines[i].indexOf(':') !== -1){
-          var copyVal = (val !== null && typeof val === 'object') ? JSON.stringify(val, null, 2) : String(val);
-          map[ln] = { key: k, value: copyVal };
-          usedLines[ln] = true;
-          break;
-        }
-      }
-      if (val && typeof val === 'object') visit(val, path.concat(k));
-    });
+function showFeedback(message) {
+  try { 
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showAlert) {
+      Telegram.WebApp.showAlert(message);
+    } else {
+      // Fallback visual feedback
+      console.log(message);
+    }
+  } catch(_) {
+    console.log(message);
   }
-  visit(json, []);
-  return map;
 }
 
-var lineMap = {};
-var editorInstance = null;
-var decorations = [];
-
-// Track tap on editor DOM directly for user gesture context
-var pendingLine = 0;
-
-function flashLine(lineNum){
-  decorations = editorInstance.deltaDecorations(decorations, [{
-    range: new monaco.Range(lineNum, 1, lineNum, 1),
-    options: { isWholeLine: true, className: 'key-highlight' }
-  }]);
-  setTimeout(function(){ decorations = editorInstance.deltaDecorations(decorations, []); }, 600);
+function copyAllText() {
+  copyText(lastPretty);
 }
 
-// Monaco config
-const CDN = 'https://unpkg.com/monaco-editor@0.49.0/min';
-require.config({ paths: { vs: CDN + '/vs' } });
-window.MonacoEnvironment = {
-  getWorkerUrl: function(){ return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
-    "self.MonacoEnvironment={baseUrl:'" + CDN + "/'};importScripts('" + CDN + "/vs/base/worker/workerMain.js');"
-  ); }
-};
+// Custom JSON renderer that creates clickable key elements
+function renderJson(obj, indent = 0) {
+  if (obj === null) return '<span class="json-null">null</span>';
+  if (typeof obj === 'string') return `<span class="json-string">"${escapeHtml(obj)}"</span>`;
+  if (typeof obj === 'number') return `<span class="json-number">${obj}</span>`;
+  if (typeof obj === 'boolean') return `<span class="json-boolean">${obj}</span>`;
+  
+  const spaces = '  '.repeat(indent);
+  const innerSpaces = '  '.repeat(indent + 1);
+  
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '<span class="json-bracket">[]</span>';
+    let result = '<span class="json-bracket">[</span>\n';
+    obj.forEach((item, index) => {
+      result += innerSpaces + renderJson(item, indent + 1);
+      if (index < obj.length - 1) result += ',';
+      result += '\n';
+    });
+    result += spaces + '<span class="json-bracket">]</span>';
+    return result;
+  }
+  
+  // Object
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return '<span class="json-bracket">{}</span>';
+  
+  let result = '<span class="json-bracket">{</span>\n';
+  keys.forEach((key, index) => {
+    const value = obj[key];
+    const valueStr = (value !== null && typeof value === 'object') 
+      ? JSON.stringify(value, null, 2) 
+      : String(value);
+    
+    // Create unique key for this key-value pair
+    const keyId = `key_${Math.random().toString(36).substr(2, 9)}`;
+    keyValueMap.set(keyId, valueStr);
+    
+    result += innerSpaces;
+    result += `<span class="json-key" data-key-id="${keyId}" onclick="copyKeyValue('${keyId}', this)">"${escapeHtml(key)}"</span>`;
+    result += ': ';
+    result += renderJson(value, indent + 1);
+    if (index < keys.length - 1) result += ',';
+    result += '\n';
+  });
+  result += spaces + '<span class="json-bracket">}</span>';
+  return result;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function copyKeyValue(keyId, element) {
+  const value = keyValueMap.get(keyId);
+  if (value !== undefined) {
+    copyText(value, element);
+  }
+}
 
 function render(){
   prepare();
-  lineMap = buildLineMap(parsedJson, lastPretty);
-  var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  require(['vs/editor/editor.main'], function(){
-    document.getElementById('editor').innerHTML = '';
-    editorInstance = monaco.editor.create(document.getElementById('editor'), {
-      value: lastPretty,
-      language: 'json',
-      readOnly: true,
-      domReadOnly: true,
-      automaticLayout: true,
-      wordWrap: 'on',
-      minimap: { enabled: false },
-      theme: prefersDark ? 'vs-dark' : 'vs',
-      folding: true,
-      lineNumbers: 'off',
-      scrollBeyondLastLine: false
-    });
-
-    // Prevent keyboard on mobile
-    var textarea = document.querySelector('.monaco-editor textarea');
-    if (textarea) textarea.setAttribute('readonly','readonly');
-
-    // Direct click on editor DOM — this IS a user gesture (clipboard will work)
-    var editorDom = document.getElementById('editor');
-    editorDom.addEventListener('click', function(){
-      // Short delay to let Monaco update cursor position first
-      setTimeout(function(){
-        var pos = editorInstance.getPosition();
-        if (!pos) return;
-        var lineNum = pos.lineNumber;
-        var info = lineMap[lineNum];
-        if (info) {
-          copyText(info.value);
-          flashLine(lineNum);
-        }
-      }, 50);
-    });
-  });
+  keyValueMap.clear();
+  const container = document.getElementById('container');
+  
+  if (!lastPretty) {
+    container.innerHTML = '<div class="error">No data found. Pass JSON as base64 in URL hash.</div>';
+    return;
+  }
+  
+  if (!parsedJson) {
+    // Raw text
+    container.innerHTML = '<pre>' + escapeHtml(lastPretty) + '</pre>';
+    return;
+  }
+  
+  // Render as clickable JSON
+  container.innerHTML = renderJson(parsedJson);
 }
+
+// Global function for onclick handlers
+window.copyKeyValue = copyKeyValue;
 
 window.addEventListener('hashchange', render);
 window.addEventListener('DOMContentLoaded', render);
